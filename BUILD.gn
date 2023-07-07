@@ -2777,6 +2777,7 @@ v8_header_set("v8_internal_headers") {
     "src/ast/ast.h",
     "src/ast/modules.h",
     "src/ast/prettyprinter.h",
+    "src/js2c/c-code-generator.h",
     "src/ast/scopes.h",
     "src/ast/source-range-ast-visitor.h",
     "src/ast/variables.h",
@@ -4390,6 +4391,7 @@ v8_source_set("v8_base_without_compiler") {
     "src/ast/ast.cc",
     "src/ast/modules.cc",
     "src/ast/prettyprinter.cc",
+    "src/js2c/c-code-generator.cc",
     "src/ast/scopes.cc",
     "src/ast/source-range-ast-visitor.cc",
     "src/ast/variables.cc",
@@ -6676,6 +6678,26 @@ v8_executable("d8") {
   if (v8_enable_vtunejit) {
     deps += [ "src/third_party/vtune:v8_vtune" ]
   }
+}
+
+v8_executable("v8_js2c") {
+  sources = [
+    "src/js2c/js2c.cc"
+  ]
+
+  configs = [
+    # Note: don't use :internal_config here because this target will get
+    # the :external_config applied to it by virtue of depending on :v8, and
+    # you can't have both applied to the same target.
+    ":internal_config_base",
+  ]
+
+  deps = [
+    ":v8",
+    ":v8_libbase",
+    ":v8_libplatform",
+    "//build/win:default_exe_manifest",
+  ]
 }
 
 v8_executable("v8_hello_world") {

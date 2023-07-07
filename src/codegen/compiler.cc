@@ -10,6 +10,7 @@
 #include "src/api/api-inl.h"
 #include "src/asmjs/asm-js.h"
 #include "src/ast/prettyprinter.h"
+#include "src/js2c/c-code-generator.h"
 #include "src/ast/scopes.h"
 #include "src/base/logging.h"
 #include "src/base/optional.h"
@@ -803,6 +804,34 @@ ExecuteSingleUnoptimizedCompilationJob(
   return job;
 }
 
+void MaybePerformJS2C(ParseInfo* parse_info, FunctionLiteral* literal) {
+  if (!v8_flags.js2c) {
+    return;
+  }
+  // PrintF("Running js2c ...\n");
+
+  StdoutStream os;
+  std::unique_ptr<char[]> name = literal->GetDebugName();
+  os << "[generating C code for function: " << name.get() << "]" << std::endl;
+
+  os << CCodeGenerator(parse_info->stack_limit())
+            .PrintProgram(literal)
+     << std::endl;
+}
+
+void MaybeFinishJS2C(ParseInfo* parse_info) {
+  if (!v8_flags.js2c) {
+    return;
+  }
+
+  StdoutStream os;
+  os << "[finishing generation of C code]" << std::endl;
+
+  os << CCodeGenerator(parse_info->stack_limit())
+            .Finish()
+     << std::endl;
+}
+
 template <typename IsolateT>
 bool IterativelyExecuteAndFinalizeUnoptimizedCompilationJobs(
     IsolateT* isolate, Handle<SharedFunctionInfo> outer_shared_info,
@@ -840,6 +869,8 @@ bool IterativelyExecuteAndFinalizeUnoptimizedCompilationJobs(
         ExecuteSingleUnoptimizedCompilationJob(parse_info, literal, script,
                                                allocator, &functions_to_compile,
                                                isolate->AsLocalIsolate());
+
+    MaybePerformJS2C(parse_info, literal);
 
     if (!job) return false;
 
@@ -880,6 +911,8 @@ bool IterativelyExecuteAndFinalizeUnoptimizedCompilationJobs(
   if (parse_info->pending_error_handler()->has_pending_warnings()) {
     parse_info->pending_error_handler()->PrepareWarnings(isolate);
   }
+
+  MaybeFinishJS2C(parse_info);
 
   return true;
 }
