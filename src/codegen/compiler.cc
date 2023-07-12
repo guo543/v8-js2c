@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <fstream>
 
 #include "src/api/api-inl.h"
 #include "src/asmjs/asm-js.h"
@@ -804,7 +805,7 @@ ExecuteSingleUnoptimizedCompilationJob(
   return job;
 }
 
-void MaybePerformJS2C(ParseInfo* parse_info, FunctionLiteral* literal) {
+void MaybePerformJS2C(ParseInfo* parse_info, FunctionLiteral* literal, std::ofstream& ofstream_c, std::ofstream& ofstream_h) {
   if (!v8_flags.js2c) {
     return;
   }
@@ -814,12 +815,16 @@ void MaybePerformJS2C(ParseInfo* parse_info, FunctionLiteral* literal) {
   std::unique_ptr<char[]> name = literal->GetDebugName();
   os << "[generating C code for function: " << name.get() << "]" << std::endl;
 
-  os << CCodeGenerator(parse_info->stack_limit())
-            .PrintProgram(literal)
+  os << CCodeGenerator(parse_info->stack_limit()).PrintProgram(literal)
      << std::endl;
+  ofstream_c << CCodeGenerator(parse_info->stack_limit()).PrintProgram(literal)
+           << std::endl;
+  ofstream_h << CCodeGenerator(parse_info->stack_limit())
+                  .PrintFunctionDeclaration(literal)
+           << std::endl;
 }
 
-void MaybeFinishJS2C(ParseInfo* parse_info) {
+void MaybeFinishJS2C(ParseInfo* parse_info, std::ofstream& ofstream) {
   if (!v8_flags.js2c) {
     return;
   }
@@ -827,9 +832,9 @@ void MaybeFinishJS2C(ParseInfo* parse_info) {
   StdoutStream os;
   os << "[finishing generation of C code]" << std::endl;
 
-  os << CCodeGenerator(parse_info->stack_limit())
-            .Finish()
-     << std::endl;
+  os << CCodeGenerator(parse_info->stack_limit()).Finish() << std::endl;
+  ofstream << CCodeGenerator(parse_info->stack_limit()).Finish() << std::endl;
+
 }
 
 template <typename IsolateT>
@@ -845,6 +850,12 @@ bool IterativelyExecuteAndFinalizeUnoptimizedCompilationJobs(
 
   std::vector<FunctionLiteral*> functions_to_compile;
   functions_to_compile.push_back(parse_info->literal());
+
+  std::ofstream ofstream_h;
+  std::ofstream ofstream_c;
+  ofstream_h.open("test.h");
+  ofstream_c.open("test.c");
+  ofstream_c << "#include \"test.h\"" << std::endl << "#include <stdio.h>" << std::endl << std::endl;
 
   bool is_first = true;
   while (!functions_to_compile.empty()) {
@@ -870,7 +881,7 @@ bool IterativelyExecuteAndFinalizeUnoptimizedCompilationJobs(
                                                allocator, &functions_to_compile,
                                                isolate->AsLocalIsolate());
 
-    MaybePerformJS2C(parse_info, literal);
+    MaybePerformJS2C(parse_info, literal, ofstream_c, ofstream_h);
 
     if (!job) return false;
 
@@ -912,7 +923,9 @@ bool IterativelyExecuteAndFinalizeUnoptimizedCompilationJobs(
     parse_info->pending_error_handler()->PrepareWarnings(isolate);
   }
 
-  MaybeFinishJS2C(parse_info);
+  MaybeFinishJS2C(parse_info, ofstream_c);
+  ofstream_c.close();
+  ofstream_h.close();
 
   return true;
 }

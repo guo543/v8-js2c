@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fstream>
 
 #include "include/libplatform/libplatform.h"
 #include "include/v8-context.h"
@@ -21,11 +22,20 @@
 #include "src/flags/flags.h"
 
 int main(int argc, char* argv[]) {
+  if (argc < 2) {
+    fprintf(stderr, "Please specify a file to compile.\n");
+    return 1;
+  }
+
+  const char* filename = argv[1];
+
   // Initialize V8.
   v8::V8::InitializeICUDefaultLocation(argv[0]);
   v8::V8::InitializeExternalStartupData(argv[0]);
   std::unique_ptr<v8::Platform> platform = v8::platform::NewDefaultPlatform();
-  v8::V8::SetFlagsFromCommandLine(&argc, argv, true);
+  // v8::V8::SetFlagsFromCommandLine(&argc, argv, true);
+  v8::V8::SetFlagsFromString("--js2c");
+  v8::V8::SetFlagsFromString("--print-ast");
   v8::V8::InitializePlatform(platform.get());
   v8::V8::Initialize();
 
@@ -47,15 +57,21 @@ int main(int argc, char* argv[]) {
     v8::Context::Scope context_scope(context);
 
     {
-      const char code[] =
-          "function add(x, y) {"
-          "  return x + y;"
-          "}"
-          "add(3, 123)";
+      // printf("%s\n", filename);
+      std::ifstream ifstream;
+      ifstream.open(filename);
+      if (ifstream.fail()) {
+        fprintf(stderr, "Error opening file: %s\n", filename);
+        exit(1);
+      }
+      std::string cpp_code;
+      std::ostringstream ss;
+      ss << ifstream.rdbuf();
+      cpp_code = ss.str();
 
       // Create a string containing the JavaScript source code.
       v8::Local<v8::String> source_string =
-          v8::String::NewFromUtf8Literal(isolate, code);
+          v8::String::NewFromUtf8(isolate, cpp_code.c_str()).ToLocalChecked();
       v8::ScriptCompiler::Source source(source_string);
       // Compile the source code.
       v8::Local<v8::Script> script = v8::ScriptCompiler::Compile(

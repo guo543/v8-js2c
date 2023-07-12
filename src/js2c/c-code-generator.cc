@@ -55,17 +55,12 @@ void CCodeGenerator::Print(const char* format, ...) {
 }
 
 void CCodeGenerator::PrintLiteral(Literal* literal, bool quote) {
-  char tmp[200] = { 0 };
   switch (literal->type()) {
     case Literal::kString:
       PrintLiteral(literal->AsRawString(), quote);
       break;
     case Literal::kSmi:
       Print("%d", Smi::ToInt(literal->AsSmiLiteral()));
-      sprintf(tmp, "%d", Smi::ToInt(literal->AsSmiLiteral()));
-      printf("%d", Smi::ToInt(literal->AsSmiLiteral()));
-      printf("%zu", strlen(tmp));
-      write(c_file_fd_, "3", 1);
       break;
     case Literal::kHeapNumber:
       Print("%g", literal->AsNumber());
@@ -99,7 +94,11 @@ void CCodeGenerator::PrintLiteral(const AstRawString* value, bool quote) {
     const int increment = value->is_one_byte() ? 1 : 2;
     const unsigned char* raw_bytes = value->raw_data();
     for (int i = 0; i < value->length(); i += increment) {
-      Print(format, raw_bytes[i]);
+      if (raw_bytes[i] == '.') {
+        Print(format, '_');
+      } else {
+        Print(format, raw_bytes[i]);
+      }
     }
   }
   if (quote) Print("\"");
@@ -147,22 +146,22 @@ class V8_NODISCARD CIndentedScope {
 CCodeGenerator::CCodeGenerator(uintptr_t stack_limit)
     : output_(nullptr), size_(0), pos_(0), indent_(0) {
   InitializeAstVisitor(stack_limit);
-  c_file_fd_ = open("test.c",
-      O_TRUNC | O_CREAT | O_WRONLY,
-      S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
+  // c_file_fd_ = open("test.c",
+  //     O_TRUNC | O_CREAT | O_WRONLY,
+  //     S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
 }
 
 CCodeGenerator::~CCodeGenerator() {
   DCHECK_EQ(indent_, 0);
   DeleteArray(output_);
   Print("int main() { return _js_entry(); }");
-  close(c_file_fd_);
+  // close(c_file_fd_);
 }
 
 
 void CCodeGenerator::PrintIndented(const char* txt) {
   for (int i = 0; i < indent_; i++) {
-    Print(". ");
+    Print("  ");
   }
   Print("%s", txt);
 }
@@ -218,19 +217,46 @@ const char* CCodeGenerator::PrintProgram(FunctionLiteral* program) {
   Init();
   bool empty = program->raw_name()->ToRawStrings().empty();
   if (empty) {
-    Print("int _js_entry() { return 3; }");
+    Print("int _js_entry(");
   } else {
     Print("int ");
     PrintLiteral(program->raw_name(), false);
-    Print("() { return 3; }");
+    Print("(");
   }
 
+  PrintParameters(program->scope());
+  Print(") { ");
+  if (empty) {
+    Print("int _result; ");
+  }
+  // PrintDeclarations(program->scope()->declarations());
+  PrintStatements(program->body());
+
+  Print(" }");
+
+  return output_;
+}
+
+const char* CCodeGenerator::PrintFunctionDeclaration(FunctionLiteral* function) {
+  Init();
+  bool empty = function->raw_name()->ToRawStrings().empty();
+  if (empty) {
+    Print("int _js_entry(");
+  } else {
+    Print("int ");
+    PrintLiteral(function->raw_name(), false);
+    Print("(");
+  }
+
+  PrintParameters(function->scope());
+
+  Print(");");
   return output_;
 }
 
 const char* CCodeGenerator::Finish() {
   Init();
-  Print("int main() { return _js_entry(); }");
+  Print("int main() { printf(\"%%d\\n\", _js_entry()); return 0; }");
   return output_;
 }
 
@@ -243,10 +269,12 @@ void CCodeGenerator::PrintDeclarations(Declaration::List* declarations) {
 
 void CCodeGenerator::PrintParameters(DeclarationScope* scope) {
   if (scope->num_parameters() > 0) {
-    CIndentedScope indent(this, "PARAMS");
     for (int i = 0; i < scope->num_parameters(); i++) {
-      PrintLiteralWithModeIndented("VAR", scope->parameter(i),
-                                   scope->parameter(i)->raw_name());
+      Print("int ");
+      PrintLiteral(scope->parameter(i)->raw_name(), false);
+      if (i != scope->num_parameters() - 1) {
+        Print(", ");
+      }
     }
   }
 }
@@ -260,6 +288,9 @@ void CCodeGenerator::PrintStatements(const ZonePtrList<Statement>* statements) {
 void CCodeGenerator::PrintArguments(const ZonePtrList<Expression>* arguments) {
   for (int i = 0; i < arguments->length(); i++) {
     Visit(arguments->at(i));
+    if (i != arguments->length() - 1) {
+      Print(", ");
+    }
   }
 }
 
@@ -290,7 +321,7 @@ void CCodeGenerator::VisitFunctionDeclaration(FunctionDeclaration* node) {
 
 
 void CCodeGenerator::VisitExpressionStatement(ExpressionStatement* node) {
-  CIndentedScope indent(this, "EXPRESSION STATEMENT", node->position());
+  // CIndentedScope indent(this, "EXPRESSION STATEMENT", node->position());
   Visit(node->expression());
 }
 
@@ -327,10 +358,9 @@ void CCodeGenerator::VisitBreakStatement(BreakStatement* node) {
 
 
 void CCodeGenerator::VisitReturnStatement(ReturnStatement* node) {
-  CIndentedScope indent(this, "RETURN", node->position());
-  write(c_file_fd_, "return ", 7);
+  Print("return ");
   Visit(node->expression());
-  write(c_file_fd_, ";", 1);
+  Print(";");
 }
 
 
@@ -559,7 +589,7 @@ void CCodeGenerator::VisitConditional(Conditional* node) {
 
 
 void CCodeGenerator::VisitLiteral(Literal* node) {
-  PrintLiteralIndented("LITERAL", node, true);
+  PrintLiteral(node, false);
 }
 
 
@@ -633,49 +663,47 @@ void CCodeGenerator::VisitArrayLiteral(ArrayLiteral* node) {
 
 
 void CCodeGenerator::VisitVariableProxy(VariableProxy* node) {
-  base::EmbeddedVector<char, 128> buf;
-  int pos = SNPrintF(buf, "VAR PROXY");
+  // base::EmbeddedVector<char, 128> buf;
+  // int pos = SNPrintF(buf, "VAR PROXY");
 
-  if (!node->is_resolved()) {
-    SNPrintF(buf + pos, " unresolved");
-    PrintLiteralWithModeIndented(buf.begin(), nullptr, node->raw_name());
-  } else {
-    Variable* var = node->var();
-    switch (var->location()) {
-      case VariableLocation::UNALLOCATED:
-        SNPrintF(buf + pos, " unallocated");
-        break;
-      case VariableLocation::PARAMETER:
-        SNPrintF(buf + pos, " parameter[%d]", var->index());
-        break;
-      case VariableLocation::LOCAL:
-        SNPrintF(buf + pos, " local[%d]", var->index());
-        break;
-      case VariableLocation::CONTEXT:
-        SNPrintF(buf + pos, " context[%d]", var->index());
-        break;
-      case VariableLocation::LOOKUP:
-        SNPrintF(buf + pos, " lookup");
-        break;
-      case VariableLocation::MODULE:
-        SNPrintF(buf + pos, " module");
-        break;
-      case VariableLocation::REPL_GLOBAL:
-        SNPrintF(buf + pos, " repl global[%d]", var->index());
-        break;
-    }
-    PrintLiteralWithModeIndented(buf.begin(), var, node->raw_name());
-    write(c_file_fd_, "result", 6);
-  }
+  // if (!node->is_resolved()) {
+  //   SNPrintF(buf + pos, " unresolved");
+  //   PrintLiteralWithModeIndented(buf.begin(), nullptr, node->raw_name());
+  // } else {
+  //   Variable* var = node->var();
+  //   switch (var->location()) {
+  //     case VariableLocation::UNALLOCATED:
+  //       SNPrintF(buf + pos, " unallocated");
+  //       break;
+  //     case VariableLocation::PARAMETER:
+  //       SNPrintF(buf + pos, " parameter[%d]", var->index());
+  //       break;
+  //     case VariableLocation::LOCAL:
+  //       SNPrintF(buf + pos, " local[%d]", var->index());
+  //       break;
+  //     case VariableLocation::CONTEXT:
+  //       SNPrintF(buf + pos, " context[%d]", var->index());
+  //       break;
+  //     case VariableLocation::LOOKUP:
+  //       SNPrintF(buf + pos, " lookup");
+  //       break;
+  //     case VariableLocation::MODULE:
+  //       SNPrintF(buf + pos, " module");
+  //       break;
+  //     case VariableLocation::REPL_GLOBAL:
+  //       SNPrintF(buf + pos, " repl global[%d]", var->index());
+  //       break;
+  //   }
+  PrintLiteral(node->raw_name(), false);
 }
 
 
 void CCodeGenerator::VisitAssignment(Assignment* node) {
-  CIndentedScope indent(this, Token::Name(node->op()), node->position());
+  // CIndentedScope indent(this, Token::Name(node->op()), node->position());
   Visit(node->target());
-  write(c_file_fd_, "=", 1);
+  Print(" = ");
   Visit(node->value());
-  write(c_file_fd_, ";", 1);
+  Print("; ");
 }
 
 void CCodeGenerator::VisitCompoundAssignment(CompoundAssignment* node) {
@@ -753,12 +781,14 @@ void CCodeGenerator::VisitProperty(Property* node) {
 }
 
 void CCodeGenerator::VisitCall(Call* node) {
-  base::EmbeddedVector<char, 128> buf;
-  SNPrintF(buf, "CALL");
-  CIndentedScope indent(this, buf.begin());
+  // base::EmbeddedVector<char, 128> buf;
+  // SNPrintF(buf, "CALL");
+  // CIndentedScope indent(this, buf.begin());
 
   Visit(node->expression());
+  Print("(");
   PrintArguments(node->arguments());
+  Print(")");
 }
 
 
@@ -794,16 +824,144 @@ void CCodeGenerator::VisitCountOperation(CountOperation* node) {
 
 
 void CCodeGenerator::VisitBinaryOperation(BinaryOperation* node) {
-  CIndentedScope indent(this, Token::Name(node->op()), node->position());
+//   CIndentedScope indent(this, Token::Name(node->op()), node->position());
   Visit(node->left());
+  switch (node->op()) {
+  case Token::ADD:
+    Print(" + ");
+    break;
+  case Token::TEMPLATE_SPAN:
+  case Token::TEMPLATE_TAIL:
+  case Token::PERIOD:
+  case Token::LBRACK:
+  case Token::QUESTION_PERIOD:
+  case Token::LPAREN:
+  case Token::RPAREN:
+  case Token::RBRACK:
+  case Token::LBRACE:
+  case Token::COLON:
+  case Token::ELLIPSIS:
+  case Token::CONDITIONAL:
+  case Token::SEMICOLON:
+  case Token::RBRACE:
+  case Token::EOS:
+  case Token::ARROW:
+  case Token::INIT:
+  case Token::ASSIGN:
+  case Token::ASSIGN_NULLISH:
+  case Token::ASSIGN_OR:
+  case Token::ASSIGN_AND:
+  case Token::ASSIGN_BIT_OR:
+  case Token::ASSIGN_BIT_XOR:
+  case Token::ASSIGN_BIT_AND:
+  case Token::ASSIGN_SHL:
+  case Token::ASSIGN_SAR:
+  case Token::ASSIGN_SHR:
+  case Token::ASSIGN_MUL:
+  case Token::ASSIGN_DIV:
+  case Token::ASSIGN_MOD:
+  case Token::ASSIGN_EXP:
+  case Token::ASSIGN_ADD:
+  case Token::ASSIGN_SUB:
+  case Token::COMMA:
+  case Token::NULLISH:
+  case Token::OR:
+  case Token::AND:
+  case Token::BIT_OR:
+  case Token::BIT_XOR:
+  case Token::BIT_AND:
+  case Token::SHL:
+  case Token::SAR:
+  case Token::SHR:
+  case Token::MUL:
+  case Token::DIV:
+  case Token::MOD:
+  case Token::EXP:
+  case Token::SUB:
+  case Token::NOT:
+  case Token::BIT_NOT:
+  case Token::DELETE:
+  case Token::TYPEOF:
+  case Token::VOID:
+  case Token::INC:
+  case Token::DEC:
+  case Token::EQ:
+  case Token::EQ_STRICT:
+  case Token::NE:
+  case Token::NE_STRICT:
+  case Token::LT:
+  case Token::GT:
+  case Token::LTE:
+  case Token::GTE:
+  case Token::INSTANCEOF:
+  case Token::IN:
+  case Token::BREAK:
+  case Token::CASE:
+  case Token::CATCH:
+  case Token::CONTINUE:
+  case Token::DEBUGGER:
+  case Token::DEFAULT:
+  case Token::DO:
+  case Token::ELSE:
+  case Token::FINALLY:
+  case Token::FOR:
+  case Token::FUNCTION:
+  case Token::IF:
+  case Token::NEW:
+  case Token::RETURN:
+  case Token::SWITCH:
+  case Token::THROW:
+  case Token::TRY:
+  case Token::VAR:
+  case Token::WHILE:
+  case Token::WITH:
+  case Token::THIS:
+  case Token::NULL_LITERAL:
+  case Token::TRUE_LITERAL:
+  case Token::FALSE_LITERAL:
+  case Token::NUMBER:
+  case Token::SMI:
+  case Token::BIGINT:
+  case Token::STRING:
+  case Token::SUPER:
+  case Token::IDENTIFIER:
+  case Token::GET:
+  case Token::SET:
+  case Token::ASYNC:
+  case Token::AWAIT:
+  case Token::YIELD:
+  case Token::LET:
+  case Token::STATIC:
+  case Token::FUTURE_STRICT_RESERVED_WORD:
+  case Token::ESCAPED_STRICT_RESERVED_WORD:
+  case Token::ENUM:
+  case Token::CLASS:
+  case Token::CONST:
+  case Token::EXPORT:
+  case Token::EXTENDS:
+  case Token::IMPORT:
+  case Token::PRIVATE_NAME:
+  case Token::ILLEGAL:
+  case Token::ESCAPED_KEYWORD:
+  case Token::WHITESPACE:
+  case Token::UNINITIALIZED:
+  case Token::REGEXP_LITERAL:
+  case Token::NUM_TOKENS:
+    break;
+  }
   Visit(node->right());
 }
 
 void CCodeGenerator::VisitNaryOperation(NaryOperation* node) {
-  CIndentedScope indent(this, Token::Name(node->op()), node->position());
+  // CIndentedScope indent(this, Token::Name(node->op()), node->position());
   Visit(node->first());
+  Print(" %s ", Token::String(node->op()));
   for (size_t i = 0; i < node->subsequent_length(); ++i) {
     Visit(node->subsequent(i));
+
+    if (i != node->subsequent_length() - 1) {
+      Print(" %s ", Token::String(node->op()));
+    }
   }
 }
 

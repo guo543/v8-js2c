@@ -19,6 +19,7 @@ class CCodeGenerator final : public AstVisitor<CCodeGenerator> {
   // The following routines print a node into a string.
   // The result string is alive as long as the AstPrinter is alive.
   const char* PrintProgram(FunctionLiteral* program);
+  const char* PrintFunctionDeclaration(FunctionLiteral* function);
   const char* Finish();
 
   void PRINTF_FORMAT(2, 3) Print(const char* format, ...);
