@@ -418,6 +418,7 @@ class V8_EXPORT ScriptCompiler {
 
    private:
     friend class ScriptCompiler;
+    friend class JS2C;
 
     Local<String> source_string;
 

@@ -878,6 +878,8 @@ void CCodeGenerator::VisitBinaryOperation(BinaryOperation* node) {
   case Token::MOD:
   case Token::EXP:
   case Token::SUB:
+    Print(" - ");
+    break;
   case Token::NOT:
   case Token::BIT_NOT:
   case Token::DELETE:
