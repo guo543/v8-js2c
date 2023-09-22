@@ -19,13 +19,14 @@
 #include "include/v8-script.h"
 #include "src/api/api-inl.h"
 #include "src/ast/ast.h"
-#include "src/js2c/c-code-generator.h"
 #include "src/codegen/script-details.h"
 #include "src/common/globals.h"
 #include "src/execution/isolate.h"
 #include "src/flags/flags.h"
-#include "src/parsing/parsing.h"
+#include "src/js2c/c-code-generator.h"
 #include "src/objects/script.h"
+#include "src/parsing/parsing.h"
+#include "src/ast/prettyprinter.h"
 
 namespace v8 {
 
@@ -70,7 +71,8 @@ void SetScriptFieldsFromDetails(i::Isolate* isolate, i::Script script,
   if (script_details.host_defined_options.ToHandle(&host_defined_options)) {
     // TODO(cbruni, chromium:1244145): Remove once migrated to the context.
     if (host_defined_options->IsFixedArray()) {
-      script.set_host_defined_options(i::FixedArray::cast(*host_defined_options));
+      script.set_host_defined_options(
+          i::FixedArray::cast(*host_defined_options));
     }
   }
 }
@@ -78,7 +80,8 @@ void SetScriptFieldsFromDetails(i::Isolate* isolate, i::Script script,
 i::Handle<i::Script> NewScript(
     i::Isolate* isolate, i::ParseInfo* parse_info, i::Handle<i::String> source,
     i::ScriptDetails script_details, i::NativesFlag natives,
-    i::MaybeHandle<i::FixedArray> maybe_wrapped_arguments = i::kNullMaybeHandle) {
+    i::MaybeHandle<i::FixedArray> maybe_wrapped_arguments =
+        i::kNullMaybeHandle) {
   // Create a script object describing the script to be compiled.
   i::Handle<i::Script> script =
       parse_info->CreateScript(isolate, source, maybe_wrapped_arguments,
@@ -89,27 +92,85 @@ i::Handle<i::Script> NewScript(
 }
 }  // namespace
 
-void PerformJS2C(i::ParseInfo* parse_info, i::FunctionLiteral* literal, std::ofstream& ofstream_c, std::ofstream& ofstream_h) {
+JS2C::JS2C(Local<Context> context, ScriptCompiler::Source* source) {
+  auto isolate =
+      reinterpret_cast<v8::internal::Isolate*>(context->GetIsolate());
+  i::ScriptDetails script_details = GetScriptDetails(
+      isolate, source->resource_name, source->resource_line_offset,
+      source->resource_column_offset, source->source_map_url,
+      source->host_defined_options, source->resource_options);
+  i::Handle<i::String> str = Utils::OpenHandle(*(source->source_string));
+  i::UnoptimizedCompileState compile_state;
+  i::ReusableUnoptimizedCompileState reusable_state(isolate);
+  i::LanguageMode language_mode =
+      construct_language_mode(i::v8_flags.use_strict);
+  i::UnoptimizedCompileFlags flags =
+      i::UnoptimizedCompileFlags::ForToplevelCompile(
+          isolate, true, language_mode, script_details.repl_mode,
+          script_details.origin_options.IsModule() ? ScriptType::kModule
+                                                   : ScriptType::kClassic,
+          false);
+
+  flags.set_is_eager(true);
+
+  i::ParseInfo parse_info(isolate, flags, &compile_state, &reusable_state);
+  i::Handle<i::Script> script =
+      NewScript(isolate, &parse_info, str, script_details, i::NOT_NATIVES_CODE);
+  i::parsing::ParseProgram(
+      &parse_info, script, isolate, i::parsing::ReportStatisticsMode::kYes);
+
+  header_generator_ = new i::CCodeGenerator(parse_info.stack_limit());
+  generator_ = new i::CCodeGenerator(parse_info.stack_limit());
+
+  std::vector<i::FunctionLiteral*> functions_to_compile;
+  functions_to_compile.push_back(parse_info.literal());
+
+  i::FunctionLiteral* literal = functions_to_compile.back();
+  functions_to_compile.pop_back();
+
+  generator_->PrepareCFile();
+
+  header_generator_->PrintFunctionDeclaration(literal);
+  generator_->PrintFunction(literal, true);
+
   i::StdoutStream os;
-  std::unique_ptr<char[]> name = literal->GetDebugName();
-  // os << "[generating C code for function: " << name.get() << "]" << std::endl;
+  os << i::AstPrinter(parse_info.stack_limit()).PrintProgram(literal);
+  os << "\n\n";
 
-  ofstream_c << i::CCodeGenerator(parse_info->stack_limit()).PrintProgram(literal)
-           << std::endl;
-  ofstream_h << i::CCodeGenerator(parse_info->stack_limit())
-                  .PrintFunctionDeclaration(literal)
-           << std::endl;
+  generator_->FinishCFile();
 }
 
-void FinishJS2C(i::ParseInfo* parse_info, std::ofstream& ofstream) {
-  // i::StdoutStream os;
-  // os << "[finishing generation of C code]" << std::endl;
+JS2C::~JS2C() { return; }
 
-  ofstream << i::CCodeGenerator(parse_info->stack_limit()).Finish() << std::endl;
-
+void JS2C::WriteToStdout() {
+  i::StdoutStream os;
+  os << header_generator_->GetOutput();
+  os << "\n";
+  os << generator_->GetOutput();
 }
 
-void JS2C::GenerateCCode(Local<Context> context,
+void JS2C::WriteToFiles() {
+  std::ofstream ofstream_h;
+  std::ofstream ofstream_c;
+  ofstream_h.open("test.h");
+  ofstream_c.open("test.c");
+
+  ofstream_h << header_generator_->GetOutput();
+  ofstream_c << generator_->GetOutput();
+
+  ofstream_h.close();
+  ofstream_c.close();
+}
+
+void JS2C::PerformJS2C(i::ParseInfo* parse_info, i::FunctionLiteral* literal) {
+  return;
+}
+
+void JS2C::FinishJS2C(i::ParseInfo* parse_info, std::ofstream& ofstream) {
+  return;
+}
+
+void JS2C::Generate(Local<Context> context,
                          ScriptCompiler::Source* source) {
   auto isolate =
       reinterpret_cast<v8::internal::Isolate*>(context->GetIsolate());
@@ -132,8 +193,8 @@ void JS2C::GenerateCCode(Local<Context> context,
   flags.set_is_eager(true);
 
   i::ParseInfo parse_info(isolate, flags, &compile_state, &reusable_state);
-  i::Handle<i::Script> script = NewScript(
-      isolate, &parse_info, str, script_details, i::NOT_NATIVES_CODE);
+  i::Handle<i::Script> script =
+      NewScript(isolate, &parse_info, str, script_details, i::NOT_NATIVES_CODE);
   bool result = i::parsing::ParseProgram(
       &parse_info, script, isolate, i::parsing::ReportStatisticsMode::kYes);
 
@@ -155,12 +216,10 @@ void JS2C::GenerateCCode(Local<Context> context,
     functions_to_compile.pop_back();
 
     // TODO: Give the functions vector to AST visitor
-    PerformJS2C(&parse_info, literal, ofstream_c, ofstream_h);
+    PerformJS2C(&parse_info, literal);
   }
 
-  FinishJS2C(&parse_info, ofstream_c);
-  ofstream_c.close();
-  ofstream_h.close();
+  return;
 }
 
 }  // namespace v8
@@ -215,21 +274,10 @@ int main(int argc, char* argv[]) {
       v8::Local<v8::String> source_string =
           v8::String::NewFromUtf8(isolate, cpp_code.c_str()).ToLocalChecked();
       v8::ScriptCompiler::Source source(source_string);
-      // Compile the source code.
-      // v8::Local<v8::Script> script =
 
-      v8::JS2C::GenerateCCode(context, &source);
-      // v8::ScriptCompiler::Compile(
-      //     context, &source, v8::ScriptCompiler::CompileOptions::kEagerCompile,
-      //     v8::ScriptCompiler::NoCacheReason::kNoCacheNoReason)
-      //     .ToLocalChecked();
-
-      // // Run the script to get the result.
-      // v8::Local<v8::Value> result = script->Run(context).ToLocalChecked();
-
-      // // Convert the result to an UTF8 string and print it.
-      // v8::String::Utf8Value utf8(isolate, result);
-      // printf("%s\n", *utf8);
+      v8::JS2C js2c(context, &source);
+      js2c.WriteToStdout();
+      js2c.WriteToFiles();
     }
   }
   // Dispose the isolate and tear down V8.

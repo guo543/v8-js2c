@@ -146,16 +146,19 @@ class V8_NODISCARD CIndentedScope {
 CCodeGenerator::CCodeGenerator(uintptr_t stack_limit)
     : output_(nullptr), size_(0), pos_(0), indent_(0) {
   InitializeAstVisitor(stack_limit);
-  // c_file_fd_ = open("test.c",
-  //     O_TRUNC | O_CREAT | O_WRONLY,
-  //     S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
+
+  Init();
 }
 
 CCodeGenerator::~CCodeGenerator() {
   DCHECK_EQ(indent_, 0);
   DeleteArray(output_);
-  Print("int main() { return _js_entry(); }");
   // close(c_file_fd_);
+}
+
+
+const char* CCodeGenerator::GetOutput() {
+  return output_;
 }
 
 
@@ -214,7 +217,6 @@ void CCodeGenerator::PrintIndentedVisit(const char* s, AstNode* node) {
 
 
 const char* CCodeGenerator::PrintProgram(FunctionLiteral* program) {
-  Init();
   bool empty = program->raw_name()->ToRawStrings().empty();
   if (empty) {
     Print("int _js_entry(");
@@ -237,6 +239,47 @@ const char* CCodeGenerator::PrintProgram(FunctionLiteral* program) {
   return output_;
 }
 
+void CCodeGenerator::PrepareCFile() {
+  Print("#include <stdio.h>\n");
+  Print("#include \"test.h\"\n\n");
+}
+
+void CCodeGenerator::FinishCFile() {
+
+  PrintIndented("int main() {\n");
+  inc_indent();
+  PrintIndented("printf(\"\045d\\n\", _js_entry());\n");
+  PrintIndented("return 0;\n");
+  dec_indent();
+  PrintIndented("}\n");
+}
+
+void CCodeGenerator::PrintFunction(FunctionLiteral* function, bool is_top_level) {
+  PrintIndented("int ");
+  if (is_top_level) {
+    Print("_js_entry");
+  } else {
+    PrintLiteral(function->raw_name(), false);
+  }
+
+  Print("(");
+
+  PrintParameters(function->scope());
+  Print(") {\n");
+  inc_indent();
+  if (is_top_level) {
+    PrintIndented("int _result;\n");
+  }
+  PrintDeclarations(function->scope()->declarations());
+  PrintStatements(function->body());
+  dec_indent();
+
+  PrintIndented("}\n\n");
+
+  return;
+}
+
+
 const char* CCodeGenerator::PrintFunctionDeclaration(FunctionLiteral* function) {
   Init();
   bool empty = function->raw_name()->ToRawStrings().empty();
@@ -250,19 +293,19 @@ const char* CCodeGenerator::PrintFunctionDeclaration(FunctionLiteral* function) 
 
   PrintParameters(function->scope());
 
-  Print(");");
+  Print(");\n");
   return output_;
 }
 
 const char* CCodeGenerator::Finish() {
   Init();
-  Print("int main() { printf(\"%%d\\n\", _js_entry()); return 0; }");
+
   return output_;
 }
 
 void CCodeGenerator::PrintDeclarations(Declaration::List* declarations) {
   if (!declarations->is_empty()) {
-    CIndentedScope indent(this, "DECLS");
+    // CIndentedScope indent(this, "DECLS");
     for (Declaration* decl : *declarations) Visit(decl);
   }
 }
@@ -296,27 +339,30 @@ void CCodeGenerator::PrintArguments(const ZonePtrList<Expression>* arguments) {
 
 
 void CCodeGenerator::VisitBlock(Block* node) {
-  const char* block_txt =
-      node->ignore_completion_value() ? "BLOCK NOCOMPLETIONS" : "BLOCK";
-  CIndentedScope indent(this, block_txt, node->position());
+  // const char* block_txt =
+  //     node->ignore_completion_value() ? "BLOCK NOCOMPLETIONS" : "BLOCK";
+  // CIndentedScope indent(this, block_txt, node->position());
   PrintStatements(node->statements());
 }
 
 
 // TODO(svenpanne) Start with IndentedScope.
 void CCodeGenerator::VisitVariableDeclaration(VariableDeclaration* node) {
-  PrintLiteralWithModeIndented("VARIABLE", node->var(),
-                               node->var()->raw_name());
+  // PrintLiteralWithModeIndented("VARIABLE", node->var(),
+  //                              node->var()->raw_name());
+  PrintIndented("int ");
+  PrintLiteral(node->var()->raw_name(), false);
+  Print(";\n");
 }
 
 
 // TODO(svenpanne) Start with IndentedScope.
 void CCodeGenerator::VisitFunctionDeclaration(FunctionDeclaration* node) {
-  PrintIndented("FUNCTION ");
-  PrintLiteral(node->var()->raw_name(), true);
-  Print(" = function ");
-  PrintLiteral(node->fun()->raw_name(), false);
-  Print("\n");
+  // PrintIndented("FUNCTION ");
+  // PrintLiteral(node->var()->raw_name(), true);
+  // Print(" = function ");
+  // PrintLiteral(node->fun()->raw_name(), false);
+  // Print("\n");
 }
 
 
@@ -358,9 +404,9 @@ void CCodeGenerator::VisitBreakStatement(BreakStatement* node) {
 
 
 void CCodeGenerator::VisitReturnStatement(ReturnStatement* node) {
-  Print("return ");
+  PrintIndented("return ");
   Visit(node->expression());
-  Print(";");
+  Print(";\n");
 }
 
 
@@ -700,10 +746,11 @@ void CCodeGenerator::VisitVariableProxy(VariableProxy* node) {
 
 void CCodeGenerator::VisitAssignment(Assignment* node) {
   // CIndentedScope indent(this, Token::Name(node->op()), node->position());
+  PrintIndented("");
   Visit(node->target());
   Print(" = ");
   Visit(node->value());
-  Print("; ");
+  Print(";\n");
 }
 
 void CCodeGenerator::VisitCompoundAssignment(CompoundAssignment* node) {

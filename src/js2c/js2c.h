@@ -14,13 +14,26 @@
 #include "src/common/globals.h"
 #include "src/execution/isolate.h"
 #include "src/flags/flags.h"
+#include "src/js2c/c-code-generator.h"
 
 namespace v8 {
 
 class JS2C {
  public:
-  static void GenerateCCode(Local<Context> context,
-                            ScriptCompiler::Source* source);
+  explicit JS2C(Local<Context> context, ScriptCompiler::Source* source);
+  ~JS2C();
+
+  void Generate(Local<Context> context, ScriptCompiler::Source* source);
+
+  void WriteToStdout();
+  void WriteToFiles();
+
+ private:
+  void PerformJS2C(i::ParseInfo* parse_info, i::FunctionLiteral* literal);
+  void FinishJS2C(i::ParseInfo* parse_info, std::ofstream& ofstream);
+
+  i::CCodeGenerator* header_generator_;
+  i::CCodeGenerator* generator_;
 };
 
 }  // namespace v8

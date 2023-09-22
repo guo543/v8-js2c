@@ -16,13 +16,19 @@ class CCodeGenerator final : public AstVisitor<CCodeGenerator> {
   explicit CCodeGenerator(uintptr_t stack_limit);
   ~CCodeGenerator();
 
+  void PrepareCFile();
+  void FinishCFile();
+
   // The following routines print a node into a string.
   // The result string is alive as long as the AstPrinter is alive.
   const char* PrintProgram(FunctionLiteral* program);
+  void PrintFunction(FunctionLiteral* function, bool is_top_level);
   const char* PrintFunctionDeclaration(FunctionLiteral* function);
   const char* Finish();
 
   void PRINTF_FORMAT(2, 3) Print(const char* format, ...);
+
+  const char* GetOutput();
 
   // Individual nodes
 #define DECLARE_VISIT(type) void Visit##type(type* node);
